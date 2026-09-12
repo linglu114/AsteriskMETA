@@ -3,6 +3,7 @@
 
 package engine.root.runtime
 
+import engine.root.daemon.control.AsteriskdControlError
 import engine.root.daemon.control.AsteriskdFailureCode
 import engine.root.daemon.control.AsteriskdPhase
 import engine.root.daemon.control.AsteriskdSnapshot
@@ -30,3 +31,11 @@ internal class RootStartFailedException(
     val phase: AsteriskdPhase?,
     cause: Throwable,
 ) : IllegalStateException("ROOT supervisor failed to start", cause)
+
+internal class RootRecordedStartFailureException(
+    val failure: AsteriskdControlError,
+    cause: Throwable,
+) : IllegalStateException(
+    "${failure.message} (${failure.code.wireValue}, ${failure.component.wireValue})",
+    cause,
+)

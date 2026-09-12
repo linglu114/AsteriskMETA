@@ -70,6 +70,16 @@ internal object AsteriskdControlCodec {
         return event
     }
 
+    fun decodeStateFailure(payload: String): AsteriskdControlError? {
+        val root = parseClosedPayload(payload.trim())
+        root.requireExactKeys(
+            "schemaVersion", "phase", "owner", "coreType", "mode",
+            "children", "matcher", "rules", "failure",
+        )
+        require(root.requiredInt("schemaVersion") == StateSchemaVersion)
+        return root.getValue("failure").toNullableObject()?.toControlError()
+    }
+
     private fun JsonObject.toSnapshot(): AsteriskdSnapshot {
         requireExactKeys(
             "phase", "owner", "coreType", "mode", "supervisorPid", "corePid",
@@ -250,4 +260,5 @@ private inline fun <reified T : Enum<T>> enumWire(value: String): T = enumValues
 
 private val RequestIdRegex = Regex("[A-Za-z0-9._-]{1,64}")
 private const val ProtocolVersion = 1
+private const val StateSchemaVersion = 2
 private const val NormalizedNonZeroExitCode = 1

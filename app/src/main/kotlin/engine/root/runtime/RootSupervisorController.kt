@@ -13,6 +13,7 @@ import engine.root.daemon.config.AsteriskdConfigEncoder
 import engine.root.daemon.config.AsteriskdMode
 import engine.root.daemon.config.AsteriskdOwner
 import engine.root.daemon.control.AsteriskdControlCodec
+import engine.root.daemon.control.AsteriskdControlError
 import engine.root.daemon.control.AsteriskdControlResponse
 import engine.root.daemon.control.AsteriskdResultCode
 import engine.root.daemon.control.AsteriskdSnapshot
@@ -32,6 +33,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import system.RootShellGateway
 import system.ShellExecOptions
 import system.ShellExecResult
+import utils.shellQuote
 import kotlin.time.Duration.Companion.milliseconds
 
 internal class RootSupervisorController(
@@ -169,7 +171,7 @@ internal class RootSupervisorController(
             if (launchResult.errno != 0 || launchResult.stdout.isNotBlank()) {
                 throw launchFailure(launchResult)
             }
-            stage = "await_ready"
+            stage = AwaitReadyStage
             runCatching { AndroidAppLogger.info(LogTag, "root_start stage=launch result=sent") }
             val snapshot = withTimeoutOrNull(StartTimeoutMilliseconds.milliseconds) {
                 when (launchMode) {
@@ -183,9 +185,17 @@ internal class RootSupervisorController(
             runCatching { AndroidAppLogger.info(LogTag, "root_start stage=ready phase=${snapshot.phase}") }
             return snapshot
         } catch (error: Exception) {
+            val recorded = if (stage == AwaitReadyStage) recordedStartFailure() else null
             val outcome = if (error is kotlinx.coroutines.CancellationException) "cancelled" else "failed"
-            runCatching { AndroidAppLogger.warn(LogTag, "root_start stage=$stage result=$outcome type=${error.javaClass.simpleName}") }
-            throw error
+            runCatching {
+                AndroidAppLogger.warn(
+                    LogTag,
+                    "root_start stage=$stage result=$outcome type=${error.javaClass.simpleName} " +
+                        "recorded_failure=${recorded?.code?.wireValue ?: "none"}",
+                )
+            }
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            throw recorded?.let { failure -> RootRecordedStartFailureException(failure, error) } ?: error
         }
     }
 
@@ -292,6 +302,22 @@ internal class RootSupervisorController(
             .forEach { warning -> runCatching { AndroidAppLogger.warn(LogTag, warning) } }
     }
 
+    private suspend fun recordedStartFailure(): AsteriskdControlError? = try {
+        val result = shell.exec(
+            "cat ${runtimeLayout.asteriskdStatePath.shellQuote()}",
+            ShellExecOptions(logFailure = false),
+        )
+        if (result.errno != 0 || result.stdout.isBlank()) {
+            null
+        } else {
+            AsteriskdControlCodec.decodeStateFailure(result.stdout)
+        }
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
+    }
+
 }
 
 private const val LogTag = "RootSupervisorController"
@@ -325,3 +351,4 @@ internal fun sanitizeLauncherStderr(stderr: String): String {
 }
 
 private const val StartTimeoutMilliseconds = 15_000L
+private const val AwaitReadyStage = "await_ready"
